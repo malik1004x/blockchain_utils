@@ -27,6 +27,7 @@ import 'package:blockchain_utils/utils/utils.dart';
 import 'package:blockchain_utils/crypto/crypto/cdsa/curve/curve.dart';
 import 'base.dart';
 import 'point.dart';
+import 'secp256k1_accelerator.dart';
 import 'package:blockchain_utils/exception/exception.dart';
 
 /// Represents a point in projective coordinates on an elliptic curve.
@@ -733,6 +734,36 @@ class ProjectiveECCPoint extends AbstractPoint {
         order: order);
   }
 
+  /// [scalar] * this via [Secp256k1Accelerator.instance], or null to use the pure Dart path.
+  ProjectiveECCPoint? _acceleratedMultiply(BigInt scalar) {
+    final accelerator = Secp256k1Accelerator.instance;
+    if (accelerator == null || !Secp256k1Accelerator.isSecp256k1(curve)) {
+      return null;
+    }
+    final k = scalar % Secp256k1Accelerator.order;
+    if (k == BigInt.zero) {
+      return null;
+    }
+    final isGenerator = generator &&
+        x == Secp256k1Accelerator.generatorX &&
+        y == Secp256k1Accelerator.generatorY;
+    final result = accelerator.multiply(
+      isGenerator ? null : toBytes(EncodeType.uncompressed),
+      BigintUtils.toBytes(k, length: 32),
+    );
+    if (result == null || result.length != 65 || result[0] != 0x04) {
+      return null;
+    }
+    return ProjectiveECCPoint._(
+        curve,
+        [
+          BigintUtils.fromBytes(result.sublist(1, 33)),
+          BigintUtils.fromBytes(result.sublist(33)),
+          BigInt.one,
+        ],
+        order: order);
+  }
+
   /// Multiplies this point by a scalar value.
   ///
   /// This method multiplies the current point by a scalar value using the
@@ -755,6 +786,11 @@ class ProjectiveECCPoint extends AbstractPoint {
       // Perform modulo operation for scalar if an order is defined
       // order*2 as a protection for Minerva
       scalar = scalar % (order! * BigInt.two);
+    }
+
+    final accelerated = _acceleratedMultiply(scalar);
+    if (accelerated != null) {
+      return accelerated;
     }
 
     _precomputeIfNeeded();

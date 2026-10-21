@@ -2,6 +2,7 @@ import 'dart:typed_data';
 import 'package:blockchain_utils/utils/utils.dart';
 import 'package:blockchain_utils/crypto/crypto/cdsa/curve/curve.dart';
 import 'package:blockchain_utils/crypto/crypto/cdsa/point/edwards.dart';
+import 'package:blockchain_utils/crypto/crypto/cdsa/point/secp256k1_accelerator.dart';
 import 'package:blockchain_utils/crypto/crypto/cdsa/utils/utils.dart';
 import 'package:blockchain_utils/exception/exception.dart';
 
@@ -235,8 +236,26 @@ abstract class AbstractPoint {
     return Tuple(coordX, coordY);
   }
 
+  /// Decompresses via [Secp256k1Accelerator.instance], or null to use the pure Dart path.
+  static Tuple<BigInt, BigInt>? _acceleratedDecompress(List<int> data, CurveFp curve) {
+    final accelerator = Secp256k1Accelerator.instance;
+    if (accelerator == null || data.length != 33 || !Secp256k1Accelerator.isSecp256k1(curve)) {
+      return null;
+    }
+    final result = accelerator.decompress(data);
+    if (result == null || result.length != 65 || result[0] != 0x04) {
+      return null;
+    }
+    return Tuple(BigintUtils.fromBytes(result.sublist(1, 33)),
+        BigintUtils.fromBytes(result.sublist(33)));
+  }
+
   /// Creates an elliptic curve point from a compressed byte encoding.
   static Tuple<BigInt, BigInt> _fromCompressed(List<int> data, CurveFp curve) {
+    final accelerated = _acceleratedDecompress(data, curve);
+    if (accelerated != null) {
+      return accelerated;
+    }
     if (data[0] != 0x02 && data[0] != 0x03) {
       throw const ArgumentException('Malformed compressed point encoding');
     }
